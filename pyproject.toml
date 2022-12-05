@@ -1,0 +1,24 @@
+[tool.poetry]
+name = "spring-data-sqlachemy"
+version = "0.1.0"
+description = "Spring Data SQLAlchemy is an offshoot of the Java-based Spring Data Framework, targeted for SQLAlchemy."
+authors = ["Vincent TERESE <vincent.terese@gmail.com>"]
+readme = "README.md"
+repository = "https://github.com/kobibleu/spring-data-sqlalchemy"
+packages = [{include = "springdata_sqlalchemy"}]
+
+[tool.poetry.dependencies]
+python = "^3.8"
+
+spring-data-python = ">=0.1.0,<1"
+SQLAlchemy = "^1.4"
+
+[tool.poetry.dev-dependencies]
+black = "^22.0"
+pytest = ">=7.0,<8"
+pytest-mock = ">=3.0,<4"
+pytest-asyncio = ">=0.19,<1"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"

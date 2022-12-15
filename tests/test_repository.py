@@ -125,6 +125,16 @@ def test_should_save_entity(repository):
     assert result.id == 1
     assert repository.count() == 1
 
+    # save same entity
+    result = repository.save(DummyOrm(id=1, data="b"))
+    assert result.id == 1
+    assert repository.count() == 1
+
+    # save another entity
+    result = repository.save(DummyOrm(id=2, data="c"))
+    assert result.id == 2
+    assert repository.count() == 2
+
 
 @pytest.mark.usefixtures("clean_database")
 def test_should_save_all_entities(repository):

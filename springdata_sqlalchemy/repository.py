@@ -5,6 +5,8 @@ from sqlalchemy import select, delete, func
 from sqlalchemy.orm import Session, DeclarativeMeta
 from sqlalchemy.sql import Select
 
+from springdata_sqlalchemy.utils import EntityInformation
+
 T = TypeVar("T", bound=DeclarativeMeta)
 ID = TypeVar("ID")
 
@@ -18,10 +20,9 @@ class CrudRepository(Generic[T, ID]):
         type_args = get_args(self.__orig_bases__[0])
         self._orm = type_args[0]
         self._session = session
-        pk_columns = self._orm.__table__.primary_key.columns.keys()
-        if len(pk_columns) != 1:
-            raise ValueError("Object Relational Mapper must have one and only one primary key")
-        self._pk = getattr(self._orm, pk_columns[0])
+        self.entity_information = EntityInformation[T, ID](self._orm)
+        if self.entity_information.has_composite_id():
+            raise ValueError("Object Relational Mapper must have one and only primary key")
 
     def clear(self) -> None:
         """
@@ -74,7 +75,8 @@ class CrudRepository(Generic[T, ID]):
         """
         if ids is None or any(id_ is None for id_ in ids):
             raise ValueError("IDs or one of its elements must not be None")
-        self._session.execute(delete(self._orm).where(self._pk.in_(ids)))
+        statement = delete(self._orm).where(self.entity_information.id_attributes[0].in_(ids))
+        self._session.execute(statement)
 
     def delete_by_id(self, id_: ID) -> None:
         """
@@ -87,7 +89,8 @@ class CrudRepository(Generic[T, ID]):
         """
         if id_ is None:
             raise ValueError("ID must not be None")
-        self._session.execute(delete(self._orm).where(self._pk == id_))
+        statement = delete(self._orm).where(self.entity_information.id_attributes[0] == id_)
+        self._session.execute(statement)
 
     def exists_by_id(self, id_: ID) -> bool:
         """
@@ -99,7 +102,8 @@ class CrudRepository(Generic[T, ID]):
         """
         if id_ is None:
             raise ValueError("ID must not be None")
-        return bool(self._execute_count(select(self._orm).where(self._pk == id_)))
+        statement = select(self._orm).where(self.entity_information.id_attributes[0] == id_)
+        return bool(self._execute_count(statement))
 
     def find_all(self, sort: Optional[Sort] = None) -> List[T]:
         """
@@ -122,7 +126,8 @@ class CrudRepository(Generic[T, ID]):
         :return: guaranteed to be not None. The size can be equal or less than the number of given ids.
         :raises ValueError: in case the given ids or one of its elements is None.
         """
-        statement = self._with_ordering(select(self._orm).where(self._pk.in_(ids)), sort)
+        statement = select(self._orm).where(self.entity_information.id_attributes[0].in_(ids))
+        statement = self._with_ordering(statement, sort)
         return self._session.execute(statement).unique().scalars().all()
 
     def find_by_id(self, id_: ID) -> Optional[T]:
@@ -146,6 +151,7 @@ class CrudRepository(Generic[T, ID]):
         :return: the saved entity, will never be None.
         :raises ValueError: in case the given entity is None.
         """
+        entity = self._synchronize_entity(entity)
         self._session.add(entity)
         self._session.commit()
         self._session.refresh(entity)
@@ -160,6 +166,7 @@ class CrudRepository(Generic[T, ID]):
                  passed as an argument.
         :raises ValueError: in case the given entities or one of its entities is None.
         """
+        entities = [self._synchronize_entity(e) for e in entities]
         self._session.add_all(entities)
         self._session.commit()
         for e in entities:
@@ -173,7 +180,8 @@ class CrudRepository(Generic[T, ID]):
         :param statement: must not be None
         :return: count result
         """
-        return self._session.execute(statement.with_only_columns([func.count(self._pk)])).scalar()
+        statement = statement.with_only_columns([func.count(self.entity_information.id_attributes[0])])
+        return self._session.execute(statement).scalar()
 
     def _with_ordering(self, statement: Select, sort: Optional[Sort]) -> Select:
         """
@@ -190,6 +198,24 @@ class CrudRepository(Generic[T, ID]):
             attr = getattr(self._orm, order.property)
             clauses.append(attr.asc() if order.is_ascending() else attr.desc())
         return statement.order_by(*clauses)
+
+    def _synchronize_entity(self, entity: T):
+        """
+        Synchronize the entity to the one persisted in database if exists.
+
+        :param entity: must not be None
+        :return: synchronized entity
+        """
+        if self.entity_information.is_new(entity):
+            return entity
+        else:
+            old_entity = self._session.get(self._orm, self.entity_information.get_id(entity))
+            if old_entity:
+                for attr in self.entity_information.attribute_names:
+                    v = getattr(entity, attr)
+                    setattr(old_entity, attr, v)
+                entity = old_entity
+            return entity
 
 
 class PagingRepository(Generic[T, ID], CrudRepository[T, ID]):

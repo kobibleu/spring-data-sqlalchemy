@@ -1,11 +1,11 @@
-from typing import TypeVar, Generic, List, Optional, get_args
+from contextlib import contextmanager
+from typing import TypeVar, Generic, List, Optional, get_args, Callable, ContextManager
 
 from springdata.domain import Page, Sort, Pageable
+from springdata_sqlalchemy.utils import EntityInformation
 from sqlalchemy import select, delete, func
 from sqlalchemy.orm import Session, DeclarativeMeta
 from sqlalchemy.sql import Select
-
-from springdata_sqlalchemy.utils import EntityInformation
 
 T = TypeVar("T", bound=DeclarativeMeta)
 ID = TypeVar("ID")
@@ -24,12 +24,28 @@ class CrudRepository(Generic[T, ID]):
         if self.entity_information.has_composite_id():
             raise ValueError("Object Relational Mapper must have one and only primary key")
 
+    @contextmanager
+    def get_current_session(self) -> Callable[..., ContextManager[Session]]:
+        """
+        Returns the current session.
+
+        :return: the current session.
+        """
+        try:
+            yield self._session
+        except Exception:
+            self._session.rollback()
+            raise
+        finally:
+            self._session.close()
+
     def clear(self) -> None:
         """
         Deletes all entities managed by the repository.
         """
-        self._session.execute(delete(self._orm))
-        self._session.commit()
+        with self.get_current_session() as session:
+            session.execute(delete(self._orm))
+            session.commit()
 
     def count(self) -> int:
         """
@@ -37,7 +53,8 @@ class CrudRepository(Generic[T, ID]):
 
         :return: the number of entities.
         """
-        return self._execute_count(select(self._orm))
+        with self.get_current_session() as session:
+            return self._execute_count(session, select(self._orm))
 
     def delete(self, entity: T) -> None:
         """
@@ -48,8 +65,9 @@ class CrudRepository(Generic[T, ID]):
         """
         if entity is None:
             raise ValueError("Entity must not be None")
-        self._session.delete(entity)
-        self._session.commit()
+        with self.get_current_session() as session:
+            session.delete(entity)
+            session.commit()
 
     def delete_all(self, entities: List[T]) -> None:
         """
@@ -60,9 +78,10 @@ class CrudRepository(Generic[T, ID]):
         """
         if entities is None or any(e is None for e in entities):
             raise ValueError("Entities or one of its elements must not be None")
-        for e in entities:
-            self._session.delete(e)
-        self._session.commit()
+        with self.get_current_session() as session:
+            for e in entities:
+                session.delete(e)
+            session.commit()
 
     def delete_all_by_id(self, ids: List[ID]) -> None:
         """
@@ -76,7 +95,9 @@ class CrudRepository(Generic[T, ID]):
         if ids is None or any(id_ is None for id_ in ids):
             raise ValueError("IDs or one of its elements must not be None")
         statement = delete(self._orm).where(self.entity_information.id_attributes[0].in_(ids))
-        self._session.execute(statement)
+        with self.get_current_session() as session:
+            session.execute(statement)
+            session.commit()
 
     def delete_by_id(self, id_: ID) -> None:
         """
@@ -90,7 +111,9 @@ class CrudRepository(Generic[T, ID]):
         if id_ is None:
             raise ValueError("ID must not be None")
         statement = delete(self._orm).where(self.entity_information.id_attributes[0] == id_)
-        self._session.execute(statement)
+        with self.get_current_session() as session:
+            session.execute(statement)
+            session.commit()
 
     def exists_by_id(self, id_: ID) -> bool:
         """
@@ -103,7 +126,8 @@ class CrudRepository(Generic[T, ID]):
         if id_ is None:
             raise ValueError("ID must not be None")
         statement = select(self._orm).where(self.entity_information.id_attributes[0] == id_)
-        return bool(self._execute_count(statement))
+        with self.get_current_session() as session:
+            return bool(self._execute_count(session, statement))
 
     def find_all(self, sort: Optional[Sort] = None) -> List[T]:
         """
@@ -113,7 +137,8 @@ class CrudRepository(Generic[T, ID]):
         :return: all entities.
         """
         statement = self._with_ordering(select(self._orm), sort)
-        return self._session.execute(statement).unique().scalars().all()
+        with self.get_current_session() as session:
+            return session.execute(statement).unique().scalars().all()
 
     def find_all_by_id(self, ids: List[ID], sort: Optional[Sort] = None) -> List[T]:
         """
@@ -128,7 +153,8 @@ class CrudRepository(Generic[T, ID]):
         """
         statement = select(self._orm).where(self.entity_information.id_attributes[0].in_(ids))
         statement = self._with_ordering(statement, sort)
-        return self._session.execute(statement).unique().scalars().all()
+        with self.get_current_session() as session:
+            return session.execute(statement).unique().scalars().all()
 
     def find_by_id(self, id_: ID) -> Optional[T]:
         """
@@ -138,7 +164,8 @@ class CrudRepository(Generic[T, ID]):
         :return: the entity with the given id or None if none found.
         :raises ValueError: if id is None.
         """
-        return self._session.get(self._orm, id_)
+        with self.get_current_session() as session:
+            return session.get(self._orm, id_)
 
     def save(self, entity: T) -> T:
         """
@@ -151,11 +178,12 @@ class CrudRepository(Generic[T, ID]):
         :return: the saved entity, will never be None.
         :raises ValueError: in case the given entity is None.
         """
-        entity = self._synchronize_entity(entity)
-        self._session.add(entity)
-        self._session.commit()
-        self._session.refresh(entity)
-        return entity
+        with self.get_current_session() as session:
+            entity = self._synchronize_entity(session, entity)
+            session.add(entity)
+            session.commit()
+            session.refresh(entity)
+            return entity
 
     def save_all(self, entities: List[T]) -> List[T]:
         """
@@ -166,22 +194,24 @@ class CrudRepository(Generic[T, ID]):
                  passed as an argument.
         :raises ValueError: in case the given entities or one of its entities is None.
         """
-        entities = [self._synchronize_entity(e) for e in entities]
-        self._session.add_all(entities)
-        self._session.commit()
-        for e in entities:
-            self._session.refresh(e)
-        return entities
+        with self.get_current_session() as session:
+            entities = [self._synchronize_entity(session, e) for e in entities]
+            session.add_all(entities)
+            session.commit()
+            for e in entities:
+                session.refresh(e)
+            return entities
 
-    def _execute_count(self, statement: Select) -> int:
+    def _execute_count(self, session: Session, statement: Select) -> int:
         """
         Execute a COUNT function with the given SELECT statement.
 
+        :param session: must not be None
         :param statement: must not be None
         :return: count result
         """
         statement = statement.with_only_columns([func.count(self.entity_information.id_attributes[0])])
-        return self._session.execute(statement).scalar()
+        return session.execute(statement).scalar()
 
     def _with_ordering(self, statement: Select, sort: Optional[Sort]) -> Select:
         """
@@ -199,17 +229,18 @@ class CrudRepository(Generic[T, ID]):
             clauses.append(attr.asc() if order.is_ascending() else attr.desc())
         return statement.order_by(*clauses)
 
-    def _synchronize_entity(self, entity: T):
+    def _synchronize_entity(self, session: Session, entity: T):
         """
         Synchronize the entity to the one persisted in database if exists.
 
+        :param session: must not be None
         :param entity: must not be None
         :return: synchronized entity
         """
         if self.entity_information.is_new(entity):
             return entity
         else:
-            old_entity = self._session.get(self._orm, self.entity_information.get_id(entity))
+            old_entity = session.get(self._orm, self.entity_information.get_id(entity))
             if old_entity:
                 for attr in self.entity_information.attribute_names:
                     v = getattr(entity, attr)
@@ -234,20 +265,22 @@ class PagingRepository(Generic[T, ID], CrudRepository[T, ID]):
         """
         if pageable is None:
             raise ValueError("Pageable must not be None")
-        return self._execute_page(select(self._orm), pageable, sort)
+        with self.get_current_session() as session:
+            return self._execute_page(session, select(self._orm), pageable, sort)
 
-    def _execute_page(self, statement: Select, pageable: Pageable, sort: Optional[Sort] = None) -> Page[T]:
+    def _execute_page(self, session: Session, statement: Select, pageable: Pageable, sort: Optional[Sort] = None) -> Page[T]:
         """
         Execute a COUNT function and the given SELECT statement.
 
+        :param session: must not be None
         :param statement: must not be None
         :param sort: the specification to sort the results by, default to None.
         :return: a page of entities
         """
-        total = self._execute_count(statement)
+        total = self._execute_count(session, statement)
         statement = self._with_paging(statement, pageable)
         statement = self._with_ordering(statement, sort)
-        content = self._session.execute(statement).unique().scalars().all()
+        content = session.execute(statement).unique().scalars().all()
         return Page(content, pageable, total)
 
     def _with_paging(self, statement: Select, pageable: Pageable) -> Select:

@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "spring-data-sqlachemy"
-version = "0.1.2"
+version = "0.1.3"
 description = "Spring Data SQLAlchemy is an offshoot of the Java-based Spring Data Framework, targeted for SQLAlchemy."
 authors = ["Vincent TERESE <vincent.terese@gmail.com>"]
 readme = "README.md"

@@ -1,6 +1,6 @@
 import asyncio
 from contextlib import asynccontextmanager
-from typing import TypeVar, Generic, List, Optional, get_args, AsyncContextManager
+from typing import TypeVar, Generic, List, Optional, get_args, Callable, AsyncContextManager
 
 from springdata.domain import Page, Sort, Pageable
 from springdata_sqlalchemy.utils import EntityInformation

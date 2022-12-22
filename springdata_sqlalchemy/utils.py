@@ -8,24 +8,23 @@ ID = TypeVar("ID")
 
 
 class EntityInformation(Generic[T, ID]):
-
-    def __init__(self, orm: DeclarativeMeta):
-        self.orm = orm
+    def __init__(self, orm_class: DeclarativeMeta):
+        self._orm_class = orm_class
 
     @property
     def attribute_names(self) -> Tuple[str, ...]:
-        return tuple(self.orm.__table__.columns.keys())
+        return tuple(self._orm_class.__table__.columns.keys())
 
     @property
     def id_attributes(self) -> Tuple:
-        return tuple(getattr(self.orm, attr) for attr in self.id_attribute_names)
+        return tuple(getattr(self._orm_class, attr) for attr in self.id_attribute_names)
 
     @property
     def id_attribute_names(self) -> Tuple[str, ...]:
-        return tuple(self.orm.__table__.primary_key.columns.keys())
+        return tuple(self._orm_class.__table__.primary_key.columns.keys())
 
     def has_composite_id(self) -> bool:
-        return len(self.orm.__table__.primary_key.columns.keys()) > 1
+        return len(self._orm_class.__table__.primary_key.columns.keys()) > 1
 
     def get_id(self, entity: T) -> ID:
         if not self.has_composite_id():
